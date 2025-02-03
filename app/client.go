@@ -6,10 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"runtime/debug"
 	"slices"
 
-	errs "github.com/pkg/errors"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
@@ -21,56 +19,54 @@ type Client struct {
 	sock         *socketmode.Client
 	config       *Config
 	ch           chan any
-	eventHandler func(bot *Client) error
+	eventHandler func(client *Client) error
 	botID        string
 	userID       string
 }
 
 // BotID returns the bot ID
-func (b *Client) BotID() string {
-	return b.botID
+func (c *Client) BotID() string {
+	return c.botID
 }
 
 // UserID returns the user ID
-func (b *Client) UserID() string {
-	return b.userID
+func (c *Client) UserID() string {
+	return c.userID
 }
 
-// New creates a new Slack client
-func New(cfg *Config) (*Client, error) {
+// NewClient creates a new Slack client
+func NewClient(cfg *Config) (*Client, error) {
 	var slackErr slack.SlackErrorResponse
 
 	api := slack.New(cfg.BotToken, slack.OptionAppLevelToken(cfg.AppLevelToken))
 
 	user, err := api.AuthTest()
 	if errors.As(err, &slackErr) {
-		slog.Error("AuthTest", "err", slackErr.Err, "message", slackErr.ResponseMetadata.Messages)
-		return nil, errs.WithStack(err)
+		logSlackError(&slackErr)
+		return nil, fmt.Errorf("%w: AuthTest: %s", ErrSlackAPI, err)
 	} else if err != nil {
-		fmt.Println(debug.Stack())
-		return nil, errs.WithStack(err)
+		return nil, err
 	}
 
 	slog.Info("Slack", "UserID", user.UserID, "User", user.User, "BotID", user.BotID, "TeamID", user.TeamID, "Team", user.Team)
 
 	cc, _, err := api.GetConversations(&slack.GetConversationsParameters{ExcludeArchived: true, Limit: 100, TeamID: user.TeamID})
 	if errors.As(err, &slackErr) {
-		slog.Error("GetConversationsParameters", "err", slackErr.Err, "message", slackErr.ResponseMetadata.Messages)
-		return nil, errs.WithStack(err)
+		logSlackError(&slackErr)
+		return nil, fmt.Errorf("%w: GetConversationsParameters: %s", ErrSlackAPI, err)
 	} else if err != nil {
-		fmt.Println(debug.Stack())
-		return nil, errs.WithStack(err)
+		return nil, err
 	}
 
 	if cfg.AutoJoin {
 		for _, c := range cc {
 			if slices.Contains(cfg.JoinChannels, c.Name) {
-				slog.Info("Slack", "Join", c.Name)
+				slog.Info("Slack", "JoinConversation", c.Name)
 				_, _, _, err := api.JoinConversation(c.ID)
 				if errors.As(err, &slackErr) {
-					for _, m := range slackErr.ResponseMetadata.Messages {
-						slog.Error("Join", "err", slackErr.Err, "message", m)
-					}
+					logSlackError(&slackErr)
+				} else if err != nil {
+					slog.Warn("JoinConversation", "err", err)
 				}
 			}
 		}
@@ -78,65 +74,63 @@ func New(cfg *Config) (*Client, error) {
 	return &Client{api: api, config: cfg, ch: make(chan any), botID: user.BotID, userID: user.UserID}, nil
 }
 
-// newSocketMode creates a new SocketMode client
-func (b *Client) newSocketMode() *socketmode.Client {
-	if b.sock == nil {
-		b.sock = socketmode.New(b.api)
+// NewSocketMode creates a new SocketMode client
+func (c *Client) newSocketMode() *socketmode.Client {
+	if c.sock == nil {
+		c.sock = socketmode.New(c.api)
 	}
-	return b.sock
+	return c.sock
 }
 
 // UserName returns the user name
-func (b *Client) UserName() string {
-	return b.config.User.Name
+func (c *Client) UserName() string {
+	return c.config.User.Name
 }
 
 // IconEmoji returns the icon emoji
-func (b *Client) IconEmoji() string {
-	return b.config.User.IconEmoji
+func (c *Client) IconEmoji() string {
+	return c.config.User.IconEmoji
 }
 
 // SetEventHandler sets the event handler
-func (b *Client) SetEventHandler(handler func(bot *Client) error) {
-	b.eventHandler = handler
+func (c *Client) SetEventHandler(handler func(client *Client) error) {
+	c.eventHandler = handler
 }
 
 // Events returns the events from channel
-func (b *Client) Events() <-chan any {
-	return b.ch
+func (c *Client) Events() <-chan any {
+	return c.ch
 }
 
 // Run start socketmode and handle event
-func (b *Client) Run() error {
-	if b.eventHandler == nil {
-		return errors.New("eventHandler is not set")
+func (c *Client) Run() error {
+	if c.eventHandler == nil {
+		return ErrEventHandleNotSet
 	}
-	go b.eventHandler(b)
+	go c.eventHandler(c)
 
-	sock := b.newSocketMode()
+	sock := c.newSocketMode()
 	go func() {
 		for ev := range sock.Events {
 			switch ev.Type {
 			case socketmode.EventTypeEventsAPI:
-				slog.Debug("EventsAPIEvent")
 				sock.Ack(*ev.Request)
 				payload, _ := ev.Data.(slackevents.EventsAPIEvent)
-				b.ch <- &payload
+				slog.Debug("EventsAPIEvent", "payload", payload)
+				c.ch <- &payload
 			case socketmode.EventTypeSlashCommand:
 				sock.Ack(*ev.Request, json.RawMessage(`{"response_type": "in_channel", "text": ""}`))
 				cmd, _ := ev.Data.(slack.SlashCommand)
 				slog.Debug("SlachCommand", "cmd", cmd.Command, "text", cmd.Text)
-				b.ch <- &cmd
+				c.ch <- &cmd
 			case socketmode.EventTypeConnecting:
 				slog.Info("Connecting...")
-				continue
 			case socketmode.EventTypeConnected:
 				slog.Info("Connected.")
-				continue
 			case socketmode.EventTypeHello:
 				slog.Info("Hello!")
 			default:
-				slog.Error("Skipped Unhandled SocketEvent", "event", ev)
+				slog.Warn("Skipped Unhandled SocketEvent", "event", ev)
 			}
 		}
 	}()

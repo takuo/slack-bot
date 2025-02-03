@@ -1,19 +1,30 @@
 package app
 
-import "github.com/slack-go/slack"
+import (
+	"errors"
+
+	"github.com/slack-go/slack"
+)
 
 // AddReaction Add reaction to a message
-func (b *Client) AddReaction(channelID, timestamp, name string) error {
-	return b.api.AddReaction(name, slack.ItemRef{
+func (c *Client) AddReaction(channelID, timestamp, name string) error {
+	return c.api.AddReaction(name, slack.ItemRef{
 		Timestamp: timestamp,
 		Channel:   channelID,
 	})
 }
 
 // RemoveReaction Remove reaction from a message
-func (b *Client) RemoveReaction(channelID, timestamp, name string) error {
-	return b.api.RemoveReaction(name, slack.ItemRef{
+func (c *Client) RemoveReaction(channelID, timestamp, name string) error {
+	var slackErr slack.SlackErrorResponse
+	if err := c.api.RemoveReaction(name, slack.ItemRef{
 		Timestamp: timestamp,
 		Channel:   channelID,
-	})
+	}); err != nil {
+		if errors.As(err, &slackErr) {
+			logSlackError(&slackErr)
+		}
+		return err
+	}
+	return nil
 }
