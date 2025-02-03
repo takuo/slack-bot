@@ -22,6 +22,7 @@ type Client struct {
 	eventHandler func(client *Client) error
 	botID        string
 	userID       string
+	team         *slack.TeamInfo
 }
 
 // BotID returns the bot ID
@@ -33,6 +34,9 @@ func (c *Client) BotID() string {
 func (c *Client) UserID() string {
 	return c.userID
 }
+
+// ChannelQueueSize is the size of the channel queue
+const ChannelQueueSize = 10
 
 // NewClient creates a new Slack client
 func NewClient(cfg *Config) (*Client, error) {
@@ -71,7 +75,7 @@ func NewClient(cfg *Config) (*Client, error) {
 			}
 		}
 	}
-	return &Client{api: api, config: cfg, ch: make(chan any), botID: user.BotID, userID: user.UserID}, nil
+	return &Client{api: api, config: cfg, ch: make(chan any, ChannelQueueSize), botID: user.BotID, userID: user.UserID}, nil
 }
 
 // NewSocketMode creates a new SocketMode client
