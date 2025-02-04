@@ -22,7 +22,7 @@ func (c *Client) RemoveReaction(channelID, timestamp, name string) error {
 		Channel:   channelID,
 	}); err != nil {
 		if errors.As(err, &slackErr) {
-			logSlackError(&slackErr)
+			c.logSlackError(&slackErr)
 		}
 		return err
 	}

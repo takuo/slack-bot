@@ -15,7 +15,7 @@ func (c *Client) GetTeamInfo() (*slack.TeamInfo, error) {
 	team, err := c.api.GetTeamInfo()
 	if err != nil {
 		if errors.As(err, &slackErr) {
-			logSlackError(&slackErr)
+			c.logSlackError(&slackErr)
 		}
 		return nil, err
 	}

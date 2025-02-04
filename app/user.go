@@ -12,7 +12,7 @@ func (c *Client) GetUserInfo(userID string) (*slack.User, error) {
 	user, err := c.api.GetUserInfo(userID)
 	if err != nil {
 		if errors.As(err, &slackErr) {
-			logSlackError(&slackErr)
+			c.logSlackError(&slackErr)
 		}
 		return nil, err
 	}

@@ -15,7 +15,7 @@ func (c *Client) PostMessage(channelID string, msgOptions ...slack.MsgOption) (s
 	_, ts, err := c.api.PostMessage(channelID, msgOptions...)
 	if err != nil {
 		if errors.As(err, &slackErr) {
-			logSlackError(&slackErr)
+			c.logSlackError(&slackErr)
 			return "", err
 		}
 		return "", err
@@ -32,7 +32,7 @@ func (c *Client) PostEphemeralMessage(channelID, userID string, msgOptions ...sl
 	ts, err := c.api.PostEphemeral(channelID, userID, msgOptions...)
 	if err != nil {
 		if errors.As(err, &slackErr) {
-			logSlackError(&slackErr)
+			c.logSlackError(&slackErr)
 		}
 		return "", err
 	}

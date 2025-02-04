@@ -2,7 +2,6 @@ package app
 
 import (
 	"errors"
-	"log/slog"
 
 	"github.com/slack-go/slack"
 )
@@ -15,8 +14,8 @@ var (
 )
 
 // logSlackError logging Slack API error
-func logSlackError(err *slack.SlackErrorResponse) {
+func (c *Client) logSlackError(err *slack.SlackErrorResponse) {
 	for _, m := range err.ResponseMetadata.Messages {
-		slog.Error("SlackAPIError", "message", m)
+		c.logger.Error("SlackAPIError", "message", m)
 	}
 }

@@ -85,17 +85,18 @@ required permissions:
 - `channels:manage`
 - `channels:history`
 - `channels:read`
+- `commands`
 - `groups:read`
 - `groups:write`
 - `groups:history`
-- `commands`
+- `reactions:write`
+- `team:read`
 - `users:read`
 - `users:write`
 
 Event Subscriptions:
 - `message.channels`
 - `message.groups`
-
 
 Optional permissions:
 - `metadata.message:read`
