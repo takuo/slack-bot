@@ -223,5 +223,4 @@ func (c *Client) Run() error {
 	})
 	g.Go(func() error { return sock.RunContext(ctx) })
 	return g.Wait()
-
 }

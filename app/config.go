@@ -54,7 +54,7 @@ func ConfigJoinChannels(channels []string) func(c *Client) {
 
 // ConfigLogLevel set LogLevel
 //
-//	string : debug|info|warn|error
+//	string : "debug"|"info"|"warn"|"error"
 func ConfigLogLevel[T string | slog.Level](level T) func(c *Client) {
 	var lv slog.Level
 	switch value := any(level).(type) {
