@@ -90,6 +90,7 @@ func NewClient(name string, configs ...Config) (*Client, error) {
 
 	cli.api = slack.New(cli.botToken.String(),
 		slack.OptionAppLevelToken(cli.appLevelToken.String()),
+		slack.OptionLog(&logger{log: cli.logger, prefix: "api: "}),
 		slack.OptionDebug(cli.debug))
 
 	user, err := cli.api.AuthTest()
@@ -99,16 +100,18 @@ func NewClient(name string, configs ...Config) (*Client, error) {
 	} else if err != nil {
 		return nil, err
 	}
-	authInfo := slog.Group("SlackAuthInfo",
-		slog.Group("User",
-			slog.String("Name", user.User),
-			slog.String("UserID", user.UserID),
-			slog.String("BotID", user.BotID)),
-		slog.Group("Team",
-			slog.String("TeamID", user.TeamID),
-			slog.String("Name", user.Team),
-			slog.String("URL", user.URL)))
-	cli.logger = cli.logger.With(authInfo)
+	if cli.debug {
+		authInfo := slog.Group("SlackAuthInfo",
+			slog.Group("User",
+				slog.String("Name", user.User),
+				slog.String("UserID", user.UserID),
+				slog.String("BotID", user.BotID)),
+			slog.Group("Team",
+				slog.String("TeamID", user.TeamID),
+				slog.String("Name", user.Team),
+				slog.String("URL", user.URL)))
+		cli.logger = cli.logger.With(authInfo)
+	}
 	cli.botID = user.BotID
 	cli.userID = user.UserID
 
@@ -139,7 +142,10 @@ func NewClient(name string, configs ...Config) (*Client, error) {
 // NewSocketMode creates a new SocketMode client
 func (c *Client) newSocketMode() *socketmode.Client {
 	if c.sock == nil {
-		c.sock = socketmode.New(c.api)
+		c.sock = socketmode.New(c.api,
+			socketmode.OptionDebug(c.debug),
+			socketmode.OptionLog(&logger{log: c.logger, prefix: "sock: "}),
+		)
 	}
 	return c.sock
 }
