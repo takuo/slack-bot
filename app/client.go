@@ -2,6 +2,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
+	"golang.org/x/sync/errgroup"
 )
 
 // Client is a struct that contains the Slack client and configuration
@@ -21,7 +23,7 @@ type Client struct {
 	api          *slack.Client
 	sock         *socketmode.Client
 	ch           chan any
-	eventHandler func(client *Client) error
+	eventHandler func(*Client, any) error
 	botID        string
 	userID       string
 	team         *slack.TeamInfo
@@ -60,6 +62,7 @@ func NewClient(name string, configs ...Config) (*Client, error) {
 	cli := &Client{
 		name:     "SlackBot",
 		logLevel: slog.LevelInfo,
+		ch:       make(chan any, ChannelQueueSize),
 	}
 
 	for _, cfg := range configs {
@@ -161,7 +164,7 @@ func (c *Client) IconEmoji() string {
 }
 
 // SetEventHandler sets the event handler
-func (c *Client) SetEventHandler(handler func(client *Client) error) {
+func (c *Client) SetEventHandler(handler func(*Client, any) error) {
 	c.eventHandler = handler
 }
 
@@ -180,10 +183,18 @@ func (c *Client) Run() error {
 	if c.eventHandler == nil {
 		return ErrEventHandleNotSet
 	}
-	go c.eventHandler(c)
+	g, ctx := errgroup.WithContext(context.Background())
+	g.Go(func() error {
+		for ev := range c.ch {
+			if err := c.eventHandler(c, ev); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 
 	sock := c.newSocketMode()
-	go func() {
+	g.Go(func() error {
 		for ev := range sock.Events {
 			switch ev.Type {
 			case socketmode.EventTypeEventsAPI:
@@ -202,10 +213,15 @@ func (c *Client) Run() error {
 				c.logger.Info("Connected.")
 			case socketmode.EventTypeHello:
 				c.logger.Info("Hello!")
+			case socketmode.EventTypeDisconnect:
+				c.logger.Warn("Disconnected", "ev", ev)
 			default:
 				c.logger.Warn("Skipped Unhandled SocketEvent", "event", ev)
 			}
 		}
-	}()
-	return sock.Run()
+		return nil
+	})
+	g.Go(func() error { return sock.RunContext(ctx) })
+	return g.Wait()
+
 }
