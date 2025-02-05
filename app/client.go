@@ -20,12 +20,24 @@ type Client struct {
 	logger       *slog.Logger
 	api          *slack.Client
 	sock         *socketmode.Client
-	config       *Config
 	ch           chan any
 	eventHandler func(client *Client) error
 	botID        string
 	userID       string
 	team         *slack.TeamInfo
+
+	// config
+	name          string
+	appLevelToken secret
+	botToken      secret
+	userName      string
+	iconEmoji     string
+
+	autoJoin     bool
+	joinChannels []string
+	logLevel     slog.Level
+	logFile      string
+	debug        bool
 }
 
 // BotID returns the bot ID
@@ -42,44 +54,47 @@ func (c *Client) UserID() string {
 const ChannelQueueSize = 10
 
 // NewClient creates a new Slack client
-func NewClient(cfg *Config) (*Client, error) {
+func NewClient(name string, configs ...Config) (*Client, error) {
 	var err error
 	var slackErr slack.SlackErrorResponse
-
-	var lv slog.Level
-	var w io.Writer
-	switch cfg.LogLevel {
-	case "debug":
-		lv = slog.LevelDebug
-	case "warn":
-		lv = slog.LevelWarn
-	case "error":
-		lv = slog.LevelError
-	default:
-		lv = slog.LevelInfo
+	cli := &Client{
+		name:     "SlackBot",
+		logLevel: slog.LevelInfo,
 	}
-	switch cfg.LogFile {
-	case "", "stdout":
-		w = os.Stderr
-	case "stderr":
-		w = os.Stderr
-	case "discard", "null", "nil", "nop":
-		w = io.Discard
-	default:
-		w, err = os.OpenFile(cfg.LogFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return nil, err
+
+	for _, cfg := range configs {
+		cfg(cli)
+	}
+
+	if cli.debug {
+		cli.logLevel = slog.LevelDebug
+	}
+
+	if cli.logger == nil {
+		var w io.Writer
+		switch cli.logFile {
+		case "", "stdout":
+			w = os.Stderr
+		case "stderr":
+			w = os.Stderr
+		case "discard", "null", "nil", "nop":
+			w = io.Discard
+		default:
+			w, err = os.OpenFile(cli.logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				return nil, err
+			}
 		}
+		cli.logger = slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: cli.logLevel})).With("AppName", name)
 	}
-	logger := slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: lv})).With("AppName", cfg.Name)
-	client := &Client{config: cfg, logger: logger, ch: make(chan any, ChannelQueueSize)}
 
-	api := slack.New(cfg.BotToken.String(), slack.OptionAppLevelToken(cfg.AppLevelToken.String()))
-	client.api = api
+	cli.api = slack.New(cli.botToken.String(),
+		slack.OptionAppLevelToken(cli.appLevelToken.String()),
+		slack.OptionDebug(cli.debug))
 
-	user, err := api.AuthTest()
+	user, err := cli.api.AuthTest()
 	if errors.As(err, &slackErr) {
-		client.logSlackError(&slackErr)
+		cli.logSlackError(&slackErr)
 		return nil, fmt.Errorf("%w: AuthTest: %s", ErrSlackAPI, err)
 	} else if err != nil {
 		return nil, err
@@ -93,32 +108,32 @@ func NewClient(cfg *Config) (*Client, error) {
 			slog.String("TeamID", user.TeamID),
 			slog.String("Name", user.Team),
 			slog.String("URL", user.URL)))
-	logger = logger.With(authInfo)
-	client.botID = user.BotID
-	client.userID = user.UserID
+	cli.logger = cli.logger.With(authInfo)
+	cli.botID = user.BotID
+	cli.userID = user.UserID
 
-	cc, _, err := api.GetConversations(&slack.GetConversationsParameters{ExcludeArchived: true, Limit: 100, TeamID: user.TeamID})
+	channels, _, err := cli.api.GetConversations(&slack.GetConversationsParameters{ExcludeArchived: true, Limit: 100, TeamID: user.TeamID})
 	if errors.As(err, &slackErr) {
-		client.logSlackError(&slackErr)
+		cli.logSlackError(&slackErr)
 		return nil, fmt.Errorf("%w: GetConversationsParameters: %s", ErrSlackAPI, err)
 	} else if err != nil {
 		return nil, err
 	}
 
-	if cfg.AutoJoin {
-		for _, c := range cc {
-			if slices.Contains(cfg.JoinChannels, c.Name) {
-				logger.Info("Slack", "JoinConversation", c.Name)
-				_, _, _, err := api.JoinConversation(c.ID)
+	if cli.autoJoin {
+		for _, ch := range channels {
+			if slices.Contains(cli.joinChannels, ch.Name) {
+				cli.logger.Info("Slack", "JoinConversation", ch.Name)
+				_, _, _, err := cli.api.JoinConversation(ch.ID)
 				if errors.As(err, &slackErr) {
-					client.logSlackError(&slackErr)
+					cli.logSlackError(&slackErr)
 				} else if err != nil {
-					logger.Warn("JoinConversation", "err", err)
+					cli.logger.Warn("JoinConversation", "err", err)
 				}
 			}
 		}
 	}
-	return client, nil
+	return cli, nil
 }
 
 // NewSocketMode creates a new SocketMode client
@@ -131,12 +146,12 @@ func (c *Client) newSocketMode() *socketmode.Client {
 
 // UserName returns the user name
 func (c *Client) UserName() string {
-	return c.config.User.Name
+	return c.userName
 }
 
 // IconEmoji returns the icon emoji
 func (c *Client) IconEmoji() string {
-	return c.config.User.IconEmoji
+	return c.iconEmoji
 }
 
 // SetEventHandler sets the event handler
