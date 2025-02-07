@@ -2,8 +2,6 @@
 package app
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,19 +12,29 @@ import (
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
-	"github.com/sourcegraph/conc/pool"
 )
+
+// DefaultAckFunc Send Ack
+func DefaultAckFunc(ev *socketmode.Event, c *Client) {
+	if ev.Request != nil && ev.Request.EnvelopeID != "" {
+		c.Ack(*ev.Request)
+	}
+}
 
 // Client is a struct that contains the Slack client and configuration
 type Client struct {
-	logger       *slog.Logger
-	api          *slack.Client
-	sock         *socketmode.Client
-	ch           chan any
-	eventHandler func(*Client, any) error
-	botID        string
-	userID       string
-	team         *slack.TeamInfo
+	logger *slog.Logger
+	api    *slack.Client
+	sock   *socketmode.Client
+	smh    *socketmode.SocketmodeHandler
+
+	msgHandlers   []func(*slackevents.MessageEvent, *Client)
+	cmdHandlerMap map[string]func(*slack.SlashCommand, *Client)
+	ackFunc       func(*socketmode.Event, *Client)
+
+	botID  string
+	userID string
+	team   *slack.TeamInfo
 
 	// config
 	name          string
@@ -42,12 +50,31 @@ type Client struct {
 	debug        bool
 }
 
-// BotID returns the bot ID
+func (c *Client) ack(ev *socketmode.Event, _ *socketmode.Client) {
+	if c.ackFunc != nil {
+		c.ackFunc(ev, c)
+	} else {
+		DefaultAckFunc(ev, c)
+	}
+}
+
+// Ack socketmode.Client.Ack wrapper
+func (c *Client) Ack(r socketmode.Request, payload ...any) {
+	c.logger.Debug("Ack", "payload", payload)
+	c.sock.Ack(r, payload...)
+}
+
+// SetAckFunc set custom Ack function
+func (c *Client) SetAckFunc(f func(*socketmode.Event, *Client)) {
+	c.ackFunc = f
+}
+
+// BotID returns the BotID
 func (c *Client) BotID() string {
 	return c.botID
 }
 
-// UserID returns the user ID
+// UserID returns the UserID of Bot
 func (c *Client) UserID() string {
 	return c.userID
 }
@@ -61,9 +88,9 @@ func NewClient(name string, configs ...Config) (*Client, error) {
 	var err error
 	var slackErr slack.SlackErrorResponse
 	cli := &Client{
-		name:     "SlackBot",
-		logLevel: slog.LevelInfo,
-		ch:       make(chan any, ChannelQueueSize),
+		name:          "SlackBot",
+		logLevel:      slog.LevelInfo,
+		cmdHandlerMap: make(map[string]func(*slack.SlashCommand, *Client)),
 	}
 
 	for _, cfg := range configs {
@@ -78,7 +105,7 @@ func NewClient(name string, configs ...Config) (*Client, error) {
 		var w io.Writer
 		switch cli.logFile {
 		case "", "stdout":
-			w = os.Stderr
+			w = os.Stdout
 		case "stderr":
 			w = os.Stderr
 		case "discard", "null", "nil", "nop":
@@ -165,74 +192,98 @@ func (c *Client) IconEmoji() string {
 	return c.iconEmoji
 }
 
-// SetEventHandler sets the event handler
-func (c *Client) SetEventHandler(handler func(*Client, any) error) {
-	c.eventHandler = handler
-}
-
 // SetLogger set a slog.Logger
 func (c *Client) SetLogger(logger *slog.Logger) {
 	c.logger = logger
 }
 
-// Events returns the events from channel
-func (c *Client) Events() <-chan any {
-	return c.ch
-}
-
 // Run start socketmode and handle event
 func (c *Client) Run() error {
-	p := pool.New().WithContext(context.Background()).WithCancelOnError()
-	if c.eventHandler == nil {
-		return ErrEventHandleNotSet
-	}
-	p.Go(func(ctx context.Context) error {
-		for {
-			select {
-			case ev := <-c.ch:
-				if err := c.eventHandler(c, ev); err != nil {
-					return err
-				}
-			case <-ctx.Done():
-				slog.Warn("EventHandlerLoop", "ctx", "done")
-				return nil
-			}
-		}
+	c.sock = c.newSocketMode()
+
+	c.smh = socketmode.NewSocketmodeHandler(c.sock)
+	// ack
+	c.smh.Handle(socketmode.EventTypeEventsAPI, c.ack)
+	c.smh.Handle(socketmode.EventTypeSlashCommand, c.ack)
+	c.smh.Handle(socketmode.EventTypeInteractive, c.ack)
+
+	c.smh.Handle(socketmode.EventTypeConnecting, func(_ *socketmode.Event, _ *socketmode.Client) {
+		c.logger.Info("Connecting...")
+	})
+	c.smh.Handle(socketmode.EventTypeConnected, func(_ *socketmode.Event, _ *socketmode.Client) {
+		c.logger.Info("Connected.")
+	})
+	c.smh.Handle(socketmode.EventTypeConnectionError, func(ev *socketmode.Event, _ *socketmode.Client) {
+		c.logger.Error("Connection Error.", "event", ev)
+	})
+	c.smh.Handle(socketmode.EventTypeDisconnect, func(ev *socketmode.Event, _ *socketmode.Client) {
+		c.logger.Warn("Disconnected.", "event", ev)
+	})
+	c.smh.Handle(socketmode.EventTypeHello, func(_ *socketmode.Event, _ *socketmode.Client) {
+		c.logger.Info("Hello!")
 	})
 
-	sock := c.newSocketMode()
-	p.Go(func(ctx context.Context) error {
-		for {
-			select {
-			case ev := <-sock.Events:
-				switch ev.Type {
-				case socketmode.EventTypeEventsAPI:
-					sock.Ack(*ev.Request)
-					payload, _ := ev.Data.(slackevents.EventsAPIEvent)
-					c.logger.Debug("EventsAPIEvent", "payload", payload)
-					c.ch <- &payload
-				case socketmode.EventTypeSlashCommand:
-					sock.Ack(*ev.Request, json.RawMessage(`{"response_type": "in_channel", "text": ""}`))
-					cmd, _ := ev.Data.(slack.SlashCommand)
-					c.logger.Debug("SlachCommand", "cmd", cmd.Command, "text", cmd.Text)
-					c.ch <- &cmd
-				case socketmode.EventTypeConnecting:
-					c.logger.Info("Connecting...")
-				case socketmode.EventTypeConnected:
-					c.logger.Info("Connected.")
-				case socketmode.EventTypeHello:
-					c.logger.Info("Hello!")
-				case socketmode.EventTypeDisconnect:
-					c.logger.Warn("Disconnected", "ev", ev)
-				default:
-					c.logger.Warn("Skipped Unhandled SocketEvent", "event", ev)
-				}
-			case <-ctx.Done():
-				slog.Warn("SocketEventLoop", "ctx", "done")
-				return nil
-			}
-		}
-	})
-	p.Go(func(ctx context.Context) error { return sock.RunContext(ctx) })
-	return p.Wait()
+	// handler wrappers
+	c.smh.Handle(socketmode.EventTypeEventsAPI, c.handleMessage)
+	c.smh.Handle(socketmode.EventTypeSlashCommand, c.handleSlashCommand)
+	// TODO: implement interaction handler
+
+	return c.smh.RunEventLoop()
+}
+
+// AddMessageHandler add a message event handler
+func (c *Client) AddMessageHandler(f func(*slackevents.MessageEvent, *Client)) {
+	if f == nil {
+		panic("handler function should not be nil")
+	}
+	c.msgHandlers = append(c.msgHandlers, f)
+}
+
+// AddSlashCommandHandler register slash command handler (only one for one command)
+func (c *Client) AddSlashCommandHandler(cmd string, f func(*slack.SlashCommand, *Client)) {
+	if cmd == "" {
+		panic("command should not be empty")
+	}
+	if f == nil {
+		panic("handler function should not be nil")
+	}
+	if _, ok := c.cmdHandlerMap[cmd]; ok {
+		panic(fmt.Sprintf("duplicate handler for %s", cmd))
+	}
+	c.cmdHandlerMap[cmd] = f
+}
+
+func (c *Client) handleMessage(ev *socketmode.Event, _ *socketmode.Client) {
+	slog.Debug("handleMessage", "event", ev)
+	if len(c.msgHandlers) == 0 {
+		return
+	}
+	pld, ok := ev.Data.(slackevents.EventsAPIEvent)
+	if !ok {
+		return
+	}
+	c.logger.Debug("EventsAPIEvent", "payload", pld)
+	msg, ok := pld.InnerEvent.Data.(*slackevents.MessageEvent)
+	if !ok {
+		return
+	}
+	c.logger.Debug("MessageEvent", "event", msg)
+	for _, h := range c.msgHandlers {
+		h(msg, c)
+	}
+}
+
+func (c *Client) handleSlashCommand(ev *socketmode.Event, _ *socketmode.Client) {
+	slog.Debug("handleSlashCommand", "event", ev)
+	if len(c.cmdHandlerMap) == 0 {
+		return
+	}
+	cmd, ok := ev.Data.(slack.SlashCommand)
+	if !ok {
+		return
+	}
+	c.logger.Debug("SlachCommand", "cmd", cmd.Command, "text", cmd.Text)
+	if h, ok := c.cmdHandlerMap[cmd.Command]; ok {
+		h(&cmd, c)
+	}
 }
