@@ -7,6 +7,7 @@ import (
 )
 
 // LeaveConversation Leave conversation
+// Required scopes: `channels:manage`,`groups:write`,`im:write`,`mpim:write`
 func (c *Client) LeaveConversation(channelID string) error {
 	var slackErr slack.SlackErrorResponse
 	if _, err := c.api.LeaveConversation(channelID); err != nil {

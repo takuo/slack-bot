@@ -7,6 +7,7 @@ import (
 )
 
 // GetUserInfo Get user info
+// Required scopes: `users:read`
 func (c *Client) GetUserInfo(userID string) (*slack.User, error) {
 	var slackErr slack.SlackErrorResponse
 	user, err := c.api.GetUserInfo(userID)

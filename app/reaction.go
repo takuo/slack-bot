@@ -7,6 +7,7 @@ import (
 )
 
 // AddReaction Add reaction to a message
+// Required scopes: `reactions:write`
 func (c *Client) AddReaction(channelID, timestamp, name string) error {
 	return c.api.AddReaction(name, slack.ItemRef{
 		Timestamp: timestamp,
@@ -15,6 +16,7 @@ func (c *Client) AddReaction(channelID, timestamp, name string) error {
 }
 
 // RemoveReaction Remove reaction from a message
+// Required scopes: `reactions:write`
 func (c *Client) RemoveReaction(channelID, timestamp, name string) error {
 	var slackErr slack.SlackErrorResponse
 	if err := c.api.RemoveReaction(name, slack.ItemRef{

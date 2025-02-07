@@ -7,6 +7,7 @@ import (
 )
 
 // GetTeamInfo Get team info
+// Required scopes: `team:read`
 func (c *Client) GetTeamInfo() (*slack.TeamInfo, error) {
 	if c.team != nil {
 		return c.team, nil

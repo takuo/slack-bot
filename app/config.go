@@ -4,13 +4,16 @@ import (
 	"log/slog"
 )
 
-type secret string
+// Secret use for secret string
+type Secret string
 
-func (s secret) LogValue() slog.Value {
+// LogValue slog interface method
+func (s Secret) LogValue() slog.Value {
 	return slog.StringValue("********")
 }
 
-func (s secret) String() string {
+// String Stringer interface method
+func (s Secret) String() string {
 	return string(s)
 }
 
@@ -24,12 +27,12 @@ func ConfigName(name string) func(c *Client) {
 
 // ConfigBotToken set BotToken
 func ConfigBotToken(token string) func(c *Client) {
-	return func(c *Client) { c.botToken = secret(token) }
+	return func(c *Client) { c.botToken = Secret(token) }
 }
 
 // ConfigAPPLevelToken set AppLevelToken
 func ConfigAPPLevelToken(token string) func(c *Client) {
-	return func(c *Client) { c.appLevelToken = secret(token) }
+	return func(c *Client) { c.appLevelToken = Secret(token) }
 }
 
 // ConfigUserName set UserName of Bot

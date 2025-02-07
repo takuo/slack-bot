@@ -30,8 +30,8 @@ type Client struct {
 
 	// config
 	name          string
-	appLevelToken secret
-	botToken      secret
+	appLevelToken Secret
+	botToken      Secret
 	userName      string
 	iconEmoji     string
 

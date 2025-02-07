@@ -6,7 +6,8 @@ import (
 	"github.com/slack-go/slack"
 )
 
-// PostMessage はメッセージを投稿します
+// PostMessage post a message
+// Required scopes: `chat:write`
 func (c *Client) PostMessage(channelID string, msgOptions ...slack.MsgOption) (string, error) {
 	var slackErr slack.SlackErrorResponse
 	if c.UserName() != "" {
@@ -28,7 +29,8 @@ func (c *Client) PostMessage(channelID string, msgOptions ...slack.MsgOption) (s
 	return ts, nil
 }
 
-// PostEphemeralMessage は ephemeral メッセージを投稿します
+// PostEphemeralMessage post an ephemeral message
+// Required scopes: `chat:write`
 func (c *Client) PostEphemeralMessage(channelID, userID string, msgOptions ...slack.MsgOption) (string, error) {
 	var slackErr slack.SlackErrorResponse
 	if c.UserName() != "" {
