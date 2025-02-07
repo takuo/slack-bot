@@ -7,14 +7,19 @@ import (
 // Secret use for secret string
 type Secret string
 
-// LogValue slog interface method
-func (s Secret) LogValue() slog.Value {
-	return slog.StringValue("********")
-}
-
 // String Stringer interface method
 func (s Secret) String() string {
-	return string(s)
+	return "********"
+}
+
+// LogValue slog interface method
+func (s Secret) LogValue() slog.Value {
+	return slog.StringValue(s.String())
+}
+
+// MarshalJSON json marshaller
+func (s Secret) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + s.String() + `"`), nil
 }
 
 // Config Client configuration
@@ -26,13 +31,13 @@ func ConfigName(name string) func(c *Client) {
 }
 
 // ConfigBotToken set BotToken
-func ConfigBotToken(token string) func(c *Client) {
-	return func(c *Client) { c.botToken = Secret(token) }
+func ConfigBotToken(token Secret) func(c *Client) {
+	return func(c *Client) { c.botToken = token }
 }
 
 // ConfigAPPLevelToken set AppLevelToken
-func ConfigAPPLevelToken(token string) func(c *Client) {
-	return func(c *Client) { c.appLevelToken = Secret(token) }
+func ConfigAPPLevelToken(token Secret) func(c *Client) {
+	return func(c *Client) { c.appLevelToken = token }
 }
 
 // ConfigUserName set UserName of Bot

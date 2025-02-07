@@ -92,8 +92,8 @@ func NewClient(name string, configs ...Config) (*Client, error) {
 		cli.logger = slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: cli.logLevel})).With("AppName", name)
 	}
 
-	cli.api = slack.New(cli.botToken.String(),
-		slack.OptionAppLevelToken(cli.appLevelToken.String()),
+	cli.api = slack.New(string(cli.botToken),
+		slack.OptionAppLevelToken(string(cli.appLevelToken)),
 		slack.OptionLog(&logger{log: cli.logger, prefix: "api: "}),
 		slack.OptionDebug(cli.debug))
 
