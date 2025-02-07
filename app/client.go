@@ -14,7 +14,7 @@ import (
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
-	"golang.org/x/sync/errgroup"
+	"github.com/sourcegraph/conc/pool"
 )
 
 // Client is a struct that contains the Slack client and configuration
@@ -56,6 +56,7 @@ func (c *Client) UserID() string {
 const ChannelQueueSize = 10
 
 // NewClient creates a new Slack client
+// Required scopes: `channels:read`, `groups:read`, `im:read`, `mpim:read`, `channels:join`
 func NewClient(name string, configs ...Config) (*Client, error) {
 	var err error
 	var slackErr slack.SlackErrorResponse
@@ -143,6 +144,7 @@ func NewClient(name string, configs ...Config) (*Client, error) {
 }
 
 // NewSocketMode creates a new SocketMode client
+// Required scopes: `connections:write`
 func (c *Client) newSocketMode() *socketmode.Client {
 	if c.sock == nil {
 		c.sock = socketmode.New(c.api,
@@ -180,47 +182,57 @@ func (c *Client) Events() <-chan any {
 
 // Run start socketmode and handle event
 func (c *Client) Run() error {
+	p := pool.New().WithContext(context.Background()).WithCancelOnError()
 	if c.eventHandler == nil {
 		return ErrEventHandleNotSet
 	}
-	g, ctx := errgroup.WithContext(context.Background())
-	g.Go(func() error {
-		for ev := range c.ch {
-			if err := c.eventHandler(c, ev); err != nil {
-				return err
+	p.Go(func(ctx context.Context) error {
+		for {
+			select {
+			case ev := <-c.ch:
+				if err := c.eventHandler(c, ev); err != nil {
+					return err
+				}
+			case <-ctx.Done():
+				slog.Warn("EventHandlerLoop", "ctx", "done")
+				return nil
 			}
 		}
-		return nil
 	})
 
 	sock := c.newSocketMode()
-	g.Go(func() error {
-		for ev := range sock.Events {
-			switch ev.Type {
-			case socketmode.EventTypeEventsAPI:
-				sock.Ack(*ev.Request)
-				payload, _ := ev.Data.(slackevents.EventsAPIEvent)
-				c.logger.Debug("EventsAPIEvent", "payload", payload)
-				c.ch <- &payload
-			case socketmode.EventTypeSlashCommand:
-				sock.Ack(*ev.Request, json.RawMessage(`{"response_type": "in_channel", "text": ""}`))
-				cmd, _ := ev.Data.(slack.SlashCommand)
-				c.logger.Debug("SlachCommand", "cmd", cmd.Command, "text", cmd.Text)
-				c.ch <- &cmd
-			case socketmode.EventTypeConnecting:
-				c.logger.Info("Connecting...")
-			case socketmode.EventTypeConnected:
-				c.logger.Info("Connected.")
-			case socketmode.EventTypeHello:
-				c.logger.Info("Hello!")
-			case socketmode.EventTypeDisconnect:
-				c.logger.Warn("Disconnected", "ev", ev)
-			default:
-				c.logger.Warn("Skipped Unhandled SocketEvent", "event", ev)
+	p.Go(func(ctx context.Context) error {
+		for {
+			select {
+			case ev := <-sock.Events:
+				switch ev.Type {
+				case socketmode.EventTypeEventsAPI:
+					sock.Ack(*ev.Request)
+					payload, _ := ev.Data.(slackevents.EventsAPIEvent)
+					c.logger.Debug("EventsAPIEvent", "payload", payload)
+					c.ch <- &payload
+				case socketmode.EventTypeSlashCommand:
+					sock.Ack(*ev.Request, json.RawMessage(`{"response_type": "in_channel", "text": ""}`))
+					cmd, _ := ev.Data.(slack.SlashCommand)
+					c.logger.Debug("SlachCommand", "cmd", cmd.Command, "text", cmd.Text)
+					c.ch <- &cmd
+				case socketmode.EventTypeConnecting:
+					c.logger.Info("Connecting...")
+				case socketmode.EventTypeConnected:
+					c.logger.Info("Connected.")
+				case socketmode.EventTypeHello:
+					c.logger.Info("Hello!")
+				case socketmode.EventTypeDisconnect:
+					c.logger.Warn("Disconnected", "ev", ev)
+				default:
+					c.logger.Warn("Skipped Unhandled SocketEvent", "event", ev)
+				}
+			case <-ctx.Done():
+				slog.Warn("SocketEventLoop", "ctx", "done")
+				return nil
 			}
 		}
-		return nil
 	})
-	g.Go(func() error { return sock.RunContext(ctx) })
-	return g.Wait()
+	p.Go(func(ctx context.Context) error { return sock.RunContext(ctx) })
+	return p.Wait()
 }
