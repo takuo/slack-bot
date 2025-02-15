@@ -193,6 +193,11 @@ func (c *Client) SetLogger(logger *slog.Logger) {
 	c.logger = logger
 }
 
+// API returns the slack.Client
+func (c *Client) API() *slack.Client {
+	return c.api
+}
+
 // Run start socketmode and handle event
 func (c *Client) Run() error {
 	c.sock = c.newSocketMode()
