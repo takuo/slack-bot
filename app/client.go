@@ -255,7 +255,6 @@ func (c *Client) AddSlashCommandHandler(cmd string, f SlashCommandHandler) {
 }
 
 func (c *Client) handleMessage(ev *socketmode.Event, _ *socketmode.Client) {
-	slog.Debug("handleMessage", "event", ev)
 	if len(c.msgHandlers) == 0 {
 		return
 	}
@@ -275,7 +274,6 @@ func (c *Client) handleMessage(ev *socketmode.Event, _ *socketmode.Client) {
 }
 
 func (c *Client) handleSlashCommand(ev *socketmode.Event, _ *socketmode.Client) {
-	slog.Debug("handleSlashCommand", "event", ev)
 	if len(c.cmdHandlerMap) == 0 {
 		return
 	}
